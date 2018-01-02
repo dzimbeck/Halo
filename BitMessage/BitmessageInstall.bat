@@ -1,0 +1,1 @@
+pyinstaller bitmessagemain.py -F --icon=BitMHalo.ico --uac-admin
