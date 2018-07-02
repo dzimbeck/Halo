@@ -1,7 +1,7 @@
 # Halo
 BitHalo/BlackHalo/BitBay/Bitmessage public commit
 
-This repository now also contains the compiled builds of Halo BitBay Markets client and the source code of the BitHalo package which you can use to build everything from.
+This repository now also contains the compiled builds of the Windows BitBay Markets client and the remaining builds are on the server.
 
 The first commit of Halo contains BitMHalo. This is a custom Bitmessage implementation for running messaging and decentralized markets
 in Halo. This is basically the backbone of communication and it is how the markets and communication are kept private and serverless.
