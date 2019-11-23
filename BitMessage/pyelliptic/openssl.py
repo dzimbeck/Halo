@@ -7,6 +7,7 @@
 #  Software slightly changed by Jonathan Warren <bitmessage at-symbol jonwarren.org>
 
 import sys
+import os
 import ctypes
 
 OpenSSL = None
@@ -31,6 +32,37 @@ class CipherName:
         return self._blocksize
 
 
+def get_version(library):
+    version = None
+    hexversion = None
+    cflags = None
+    try:
+        #OpenSSL 1.1
+        OPENSSL_VERSION = 0
+        OPENSSL_CFLAGS = 1
+        library.OpenSSL_version.argtypes = [ctypes.c_int]
+        library.OpenSSL_version.restype = ctypes.c_char_p
+        version = library.OpenSSL_version(OPENSSL_VERSION)
+        cflags = library.OpenSSL_version(OPENSSL_CFLAGS)
+        library.OpenSSL_version_num.restype = ctypes.c_long
+        hexversion = library.OpenSSL_version_num()
+    except AttributeError:
+        try:
+            #OpenSSL 1.0
+            SSLEAY_VERSION = 0
+            SSLEAY_CFLAGS = 2
+            library.SSLeay.restype = ctypes.c_long
+            library.SSLeay_version.restype = ctypes.c_char_p
+            library.SSLeay_version.argtypes = [ctypes.c_int]
+            version = library.SSLeay_version(SSLEAY_VERSION)
+            cflags = library.SSLeay_version(SSLEAY_CFLAGS)
+            hexversion = library.SSLeay()
+        except AttributeError:
+            #raise NotImplementedError('Cannot determine version of this OpenSSL library.')
+            pass
+    return (version, hexversion, cflags)
+
+
 class _OpenSSL:
     """
     Wrapper for OpenSSL using ctypes
@@ -40,6 +72,8 @@ class _OpenSSL:
         Build the wrapper
         """
         self._lib = ctypes.CDLL(library)
+        self._version, self._hexversion, self._cflags = get_version(self._lib)
+        self._libreSSL = self._version.startswith("LibreSSL")
 
         self.pointer = ctypes.pointer
         self.c_int = ctypes.c_int
@@ -138,17 +172,26 @@ class _OpenSSL:
         self.EC_KEY_set_private_key.argtypes = [ctypes.c_void_p,
                                                 ctypes.c_void_p]
 
-        self.ECDH_OpenSSL = self._lib.ECDH_OpenSSL
-        self._lib.ECDH_OpenSSL.restype = ctypes.c_void_p
-        self._lib.ECDH_OpenSSL.argtypes = []
+        if self._hexversion >= 0x10100000 and not self._libreSSL:
+            self.EC_KEY_OpenSSL = self._lib.EC_KEY_OpenSSL
+            self._lib.EC_KEY_OpenSSL.restype = ctypes.c_void_p
+            self._lib.EC_KEY_OpenSSL.argtypes = []
+            
+            self.EC_KEY_set_method = self._lib.EC_KEY_set_method
+            self._lib.EC_KEY_set_method.restype = ctypes.c_int
+            self._lib.EC_KEY_set_method.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        else:
+            self.ECDH_OpenSSL = self._lib.ECDH_OpenSSL
+            self._lib.ECDH_OpenSSL.restype = ctypes.c_void_p
+            self._lib.ECDH_OpenSSL.argtypes = []
+
+            self.ECDH_set_method = self._lib.ECDH_set_method
+            self._lib.ECDH_set_method.restype = ctypes.c_int
+            self._lib.ECDH_set_method.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         self.BN_CTX_new = self._lib.BN_CTX_new
         self._lib.BN_CTX_new.restype = ctypes.c_void_p
         self._lib.BN_CTX_new.argtypes = []
-
-        self.ECDH_set_method = self._lib.ECDH_set_method
-        self._lib.ECDH_set_method.restype = ctypes.c_int
-        self._lib.ECDH_set_method.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         self.ECDH_compute_key = self._lib.ECDH_compute_key
         self.ECDH_compute_key.restype = ctypes.c_int
@@ -208,10 +251,15 @@ class _OpenSSL:
         self.EVP_rc4 = self._lib.EVP_rc4
         self.EVP_rc4.restype = ctypes.c_void_p
         self.EVP_rc4.argtypes = []
-
-        self.EVP_CIPHER_CTX_cleanup = self._lib.EVP_CIPHER_CTX_cleanup
-        self.EVP_CIPHER_CTX_cleanup.restype = ctypes.c_int
-        self.EVP_CIPHER_CTX_cleanup.argtypes = [ctypes.c_void_p]
+ 
+        if self._hexversion >= 0x10100000 and not self._libreSSL:
+            self.EVP_CIPHER_CTX_reset = self._lib.EVP_CIPHER_CTX_reset
+            self.EVP_CIPHER_CTX_reset.restype = ctypes.c_int
+            self.EVP_CIPHER_CTX_reset.argtypes = [ctypes.c_void_p]
+        else:
+            self.EVP_CIPHER_CTX_cleanup = self._lib.EVP_CIPHER_CTX_cleanup
+            self.EVP_CIPHER_CTX_cleanup.restype = ctypes.c_int
+            self.EVP_CIPHER_CTX_cleanup.argtypes = [ctypes.c_void_p]
 
         self.EVP_CIPHER_CTX_free = self._lib.EVP_CIPHER_CTX_free
         self.EVP_CIPHER_CTX_free.restype = None
@@ -231,6 +279,10 @@ class _OpenSSL:
         self.EVP_DigestInit.restype = ctypes.c_int
         self._lib.EVP_DigestInit.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
+        self.EVP_DigestInit_ex = self._lib.EVP_DigestInit_ex
+        self.EVP_DigestInit_ex.restype = ctypes.c_int
+        self._lib.EVP_DigestInit_ex.argtypes = 3 * [ctypes.c_void_p]
+        
         self.EVP_DigestUpdate = self._lib.EVP_DigestUpdate
         self.EVP_DigestUpdate.restype = ctypes.c_int
         self.EVP_DigestUpdate.argtypes = [ctypes.c_void_p,
@@ -241,10 +293,11 @@ class _OpenSSL:
         self.EVP_DigestFinal.argtypes = [ctypes.c_void_p,
                                          ctypes.c_void_p, ctypes.c_void_p]
 
-        self.EVP_ecdsa = self._lib.EVP_ecdsa
-        self._lib.EVP_ecdsa.restype = ctypes.c_void_p
-        self._lib.EVP_ecdsa.argtypes = []
-
+        self.EVP_DigestFinal_ex = self._lib.EVP_DigestFinal_ex
+        self.EVP_DigestFinal_ex.restype = ctypes.c_int
+        self.EVP_DigestFinal_ex.argtypes = [ctypes.c_void_p,
+                                            ctypes.c_void_p, ctypes.c_void_p]
+        
         self.ECDSA_sign = self._lib.ECDSA_sign
         self.ECDSA_sign.restype = ctypes.c_int
         self.ECDSA_sign.argtypes = [ctypes.c_int, ctypes.c_void_p,
@@ -255,22 +308,46 @@ class _OpenSSL:
         self.ECDSA_verify.argtypes = [ctypes.c_int, ctypes.c_void_p,
                                       ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
 
-        self.EVP_MD_CTX_create = self._lib.EVP_MD_CTX_create
-        self.EVP_MD_CTX_create.restype = ctypes.c_void_p
-        self.EVP_MD_CTX_create.argtypes = []
+        if self._hexversion >= 0x10100000 and not self._libreSSL:
+            self.EVP_MD_CTX_new = self._lib.EVP_MD_CTX_new
+            self.EVP_MD_CTX_new.restype = ctypes.c_void_p
+            self.EVP_MD_CTX_new.argtypes = []
+        
+            self.EVP_MD_CTX_reset = self._lib.EVP_MD_CTX_reset
+            self.EVP_MD_CTX_reset.restype = None
+            self.EVP_MD_CTX_reset.argtypes = [ctypes.c_void_p]
 
-        self.EVP_MD_CTX_init = self._lib.EVP_MD_CTX_init
-        self.EVP_MD_CTX_init.restype = None
-        self.EVP_MD_CTX_init.argtypes = [ctypes.c_void_p]
+            self.EVP_MD_CTX_free = self._lib.EVP_MD_CTX_free
+            self.EVP_MD_CTX_free.restype = None
+            self.EVP_MD_CTX_free.argtypes = [ctypes.c_void_p]
 
-        self.EVP_MD_CTX_destroy = self._lib.EVP_MD_CTX_destroy
-        self.EVP_MD_CTX_destroy.restype = None
-        self.EVP_MD_CTX_destroy.argtypes = [ctypes.c_void_p]
+            self.EVP_sha1 = self._lib.EVP_sha1
+            self.EVP_sha1.restype = ctypes.c_void_p
+            self.EVP_sha1.argtypes = []
+
+            self.digest_ecdsa_sha1 = self.EVP_sha1
+        else:
+            self.EVP_MD_CTX_create = self._lib.EVP_MD_CTX_create
+            self.EVP_MD_CTX_create.restype = ctypes.c_void_p
+            self.EVP_MD_CTX_create.argtypes = []
+ 
+            self.EVP_MD_CTX_init = self._lib.EVP_MD_CTX_init
+            self.EVP_MD_CTX_init.restype = None
+            self.EVP_MD_CTX_init.argtypes = [ctypes.c_void_p]
+ 
+            self.EVP_MD_CTX_destroy = self._lib.EVP_MD_CTX_destroy
+            self.EVP_MD_CTX_destroy.restype = None
+            self.EVP_MD_CTX_destroy.argtypes = [ctypes.c_void_p]
+
+            self.EVP_ecdsa = self._lib.EVP_ecdsa
+            self._lib.EVP_ecdsa.restype = ctypes.c_void_p
+            self._lib.EVP_ecdsa.argtypes = []
+
+            self.digest_ecdsa_sha1 = self.EVP_ecdsa
 
         self.RAND_bytes = self._lib.RAND_bytes
         self.RAND_bytes.restype = ctypes.c_int
         self.RAND_bytes.argtypes = [ctypes.c_void_p, ctypes.c_int]
-
 
         self.EVP_sha256 = self._lib.EVP_sha256
         self.EVP_sha256.restype = ctypes.c_void_p
@@ -418,35 +495,74 @@ class _OpenSSL:
             buffer = self.create_string_buffer(size)
         return buffer
 
-try:
-    OpenSSL = _OpenSSL('libcrypto.so')
-except:
-    try:
-        OpenSSL = _OpenSSL('libeay32.dll')
-    except:
+def getPythonFileLocation():
+    """  returns the location of where the python file is located. """
+    if os.path.dirname(sys.argv[0]) !="":
+        return os.path.dirname(sys.argv[0])
+    if os.path.dirname(__file__) != "":
+        return os.path.dirname(__file__)
+    elif os.path.dirname(os.path.abspath(__file__)) != "":
+        return os.path.dirname(os.path.abspath(__file__))
+    elif os.path.dirname(os.getcwd()) != "":
+        return os.path.dirname(os.getcwd())
+    else:
+        from inspect import getsourcefile
+        return os.path.dirname(os.path.abspath(getsourcefile(lambda _:None)))
+
+def loadOpenSSL():
+    global OpenSSL
+    from os import path, environ
+    from ctypes.util import find_library
+    
+    libdir = []
+    if getattr(sys,'frozen', None):
+        if hasattr(sys, "_MEIPASS"):
+            datadir = sys._MEIPASS
+        else:
+            datadir = getPythonFileLocation()
+        if 'darwin' in sys.platform:
+            libdir.extend([
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.dylib'),
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.1.1.0.dylib'),
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.1.0.2.dylib'),
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.1.0.1.dylib'),
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.1.0.0.dylib'),
+                path.join(environ['RESOURCEPATH'], '..', 'Frameworks','libcrypto.0.9.8.dylib'),
+                ])
+        elif 'win32' in sys.platform or 'win64' in sys.platform:
+            libdir.append(path.join(datadir, 'libeay32.dll'))
+        else:
+            libdir.extend([
+                path.join(datadir, 'libcrypto.so'),
+                path.join(datadir, 'libssl.so'),
+                path.join(datadir, 'libcrypto.so.1.1.0'),
+                path.join(datadir, 'libssl.so.1.1.0'),
+                path.join(datadir, 'libcrypto.so.1.0.2'),
+                path.join(datadir, 'libssl.so.1.0.2'),
+                path.join(datadir, 'libcrypto.so.1.0.1'),
+                path.join(datadir, 'libssl.so.1.0.1'),
+                path.join(datadir, 'libcrypto.so.1.0.0'),
+                path.join(datadir, 'libssl.so.1.0.0'),
+                path.join(datadir, 'libcrypto.so.0.9.8'),
+                path.join(datadir, 'libssl.so.0.9.8'),
+            ])
+    if 'darwin' in sys.platform:
+        libdir.extend(['libcrypto.dylib', '/usr/local/opt/openssl/lib/libcrypto.dylib'])
+    elif 'win32' in sys.platform or 'win64' in sys.platform:
+        libdir.append('libeay32.dll')
+    else:
+        libdir.append('libcrypto.so')
+        libdir.append('libssl.so')
+    if 'linux' in sys.platform or 'darwin' in sys.platform or 'bsd' in sys.platform:
+        libdir.append(find_library('ssl'))
+    elif 'win32' in sys.platform or 'win64' in sys.platform:
+        libdir.append(find_library('libeay32'))
+    for library in libdir:
         try:
-            OpenSSL = _OpenSSL('libcrypto.dylib')
+            OpenSSL = _OpenSSL(library)
+            return
         except:
-            try:
-                # try homebrew installation
-                OpenSSL = _OpenSSL('/usr/local/opt/openssl/lib/libcrypto.dylib')
-            except:
-                try:
-                  # Load it from an Bitmessage.app on OSX
-                  OpenSSL = _OpenSSL('./../Frameworks/libcrypto.dylib')
-                except:
-                  try:
-                      from os import path
-                      lib_path = path.join(sys._MEIPASS, "libeay32.dll")
-                      OpenSSL = _OpenSSL(lib_path)
-                  except:
-                      if 'linux' in sys.platform or 'darwin' in sys.platform or 'freebsd' in sys.platform:
-                          try:
-                              from ctypes.util import find_library
-                              OpenSSL = _OpenSSL(find_library('ssl'))
-                          except Exception, err:
-                              sys.stderr.write('(On Linux) Couldn\'t find and load the OpenSSL library. You must install it. If you believe that you already have it installed, this exception information might be of use:\n')
-                              from ctypes.util import find_library
-                              OpenSSL = _OpenSSL(find_library('ssl'))
-                      else:
-                          raise Exception("Couldn't find and load the OpenSSL library. You must install it.")
+            pass
+    raise Exception("Couldn't find and load the OpenSSL library. You must install it.")
+
+loadOpenSSL()

@@ -36,7 +36,7 @@ Further commits to this branch will probably separate these comments to another 
 
 To build this, there is an SH and BAT file for installing dependencies. Notice some of those are Halo dependencies.
 Halos obfuscated source code can be found at:
-www.davtonia.com/BitHalo/HaloOBF.zip
+https://bithalo.org/bithalo.github.io/bithalo/downloads/BitHaloSource.html
 
 That link contains the full Halo source with variable names changed. It also has building instructions and binaries.
 
