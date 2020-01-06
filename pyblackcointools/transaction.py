@@ -100,6 +100,9 @@ SIGHASH_ALL = 1
 SIGHASH_NONE = 2
 SIGHASH_SINGLE = 3
 SIGHASH_ANYONECANPAY = 80
+ALL_ANYONECANPAY = 129#81
+NONE_ANYONECANPAY = 130#82
+SINGLE_ANYONECANPAY = 131#83
 
 def signature_form(tx, i, script, hashcode = SIGHASH_ALL):
     i, hashcode = int(i), int(hashcode)
@@ -108,17 +111,33 @@ def signature_form(tx, i, script, hashcode = SIGHASH_ALL):
     newtx = copy.deepcopy(tx)
     for inp in newtx["ins"]: inp["script"] = ""
     newtx["ins"][i]["script"] = script
+    anyonecanpay=False
+    setsequence=False
+    #if hashcode > 80 and hashcode < 84:
+    #    hashcode-=80
+    if hashcode > 128 and hashcode < 132:
+        hashcode-=128
+        anyonecanpay=True
     if hashcode == SIGHASH_NONE:
+        setsequence=True
         newtx["outs"] = []
     elif hashcode == SIGHASH_SINGLE:
-        newtx["outs"] = newtx["outs"][:len(newtx["ins"])]
-        for out in range(len(newtx["ins"]) - 1):
-            out.value = 2**64 - 1
-            out.script = ""
-    elif hashcode == SIGHASH_ANYONECANPAY:
-        newtx["ins"] = [newtx["ins"][i]]
+        setsequence=True
+        if i >= len(newtx["outs"]):
+            raise Exception("You are trying to use SIGHASH_SINGLE to sign an input that does not have a corresponding output.")
+        else:
+            newtx["outs"] = newtx["outs"][:i+1]
+            for out in newtx["outs"][:i]:
+                out["value"] = 2**64 - 1
+                out["script"] = ""
     else:
         pass
+    if anyonecanpay:
+        newtx["ins"] = [newtx["ins"][i]]
+    if setsequence:
+        for inp in xrange(len(newtx["ins"])):
+            if inp is not i:
+                newtx["ins"][inp]['sequence'] = 0
     return newtx
 
 ### Making the actual signatures
@@ -248,21 +267,22 @@ def mk_multisig_script(*args): # [pubs],k,n or pub1,pub2...pub[n],k,n
 
 ### Signing and verifying
 
-def verify_tx_input(tx,i,script,sig,pub):
+def verify_tx_input(tx,i,script,sig,pub,hashcode=SIGHASH_ALL):
     if re.match('^[0-9a-fA-F]*$',tx): tx = tx.decode('hex')
     if re.match('^[0-9a-fA-F]*$',script): script = script.decode('hex')
     if not re.match('^[0-9a-fA-F]*$',sig): sig = sig.encode('hex')
-    hashcode = decode(sig[-2:],16)
+    #A service may want a specific hash code, so the next line is not needed
+    #hashcode = decode(sig[-2:],16)
     modtx = signature_form(tx,int(i),script,hashcode)
     return ecdsa_tx_verify(modtx,sig,pub,hashcode)
 
-def sign(tx,i,priv, public=0):
+def sign(tx,i,priv,public=0):
     i = int(i)
     if not re.match('^[0-9a-fA-F]*$',tx):
         return sign(tx.encode('hex'),i,priv).decode('hex')
     if len(priv) <= 33: priv = priv.encode('hex')
     pub = privkey_to_pubkey(priv)
-    address = pubkey_to_address(pub)
+    address = pubkey_to_address(pub, 25)
     if public==0:
         signing_tx = signature_form(tx,i,mk_pubkey_script(address))
     else:
